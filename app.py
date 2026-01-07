@@ -1,4 +1,5 @@
 import streamlit as st
+st.markdown('<link rel="manifest" href="./static/manifest.json">', unsafe_allow_html=True)
 import pytesseract
 from PIL import Image
 import cv2
