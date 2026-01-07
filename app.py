@@ -1,6 +1,3 @@
-cd /www/wwwroot/biling.web.id
-
-cat > app.py << 'EOF'
 import streamlit as st
 import pytesseract
 from PIL import Image
@@ -9,92 +6,109 @@ import numpy as np
 from datetime import datetime
 import re
 
-# Simple OCR Print App dengan Edit Biaya Admin
-st.set_page_config(page_title="OCR Print + Admin", layout="centered")
-st.title("🖨️ OCR + EDIT ADMIN + PRINT")
+# Setup
+pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+st.set_page_config(
+    page_title="BESTINDO - Auto OCR",
+    page_icon="⚡",
+    layout="centered"
+)
 
-# Upload
-uploaded = st.file_uploader("Upload struk", type=['jpg','png','jpeg'])
+# Header
+st.title("⚡ BESTINDO - Upload Langsung Proses")
+st.markdown("**Upload → Auto OCR → Edit Admin → Print**")
 
-if uploaded:
-    # Tampilkan gambar
-    st.image(uploaded, use_container_width=True)
+# Inisialisasi session state
+if 'auto_process' not in st.session_state:
+    st.session_state.auto_process = False
+
+# Fungsi proses OCR
+def process_ocr(image):
+    """Proses OCR pada gambar"""
+    try:
+        # Convert ke grayscale
+        gray = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2GRAY)
+        
+        # Enhance contrast untuk hasil lebih baik
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        enhanced = clahe.apply(gray)
+        
+        # OCR dengan bahasa Indonesia
+        text = pytesseract.image_to_string(enhanced, lang='ind')
+        
+        return text
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# Fungsi filter items
+def filter_items(ocr_text):
+    """Filter hanya items belanja"""
+    lines = ocr_text.strip().split('\n')
+    filtered = []
     
-    # Proses OCR
-    if st.button("🔍 Proses OCR", type="primary"):
-        img = Image.open(uploaded)
-        gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
-        text = pytesseract.image_to_string(gray, lang='ind')
-        st.session_state.text = text
-        st.success("✅ OCR Selesai!")
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Skip jika mengandung keyword yang tidak diinginkan
+        exclude_keywords = ['TANGGAL', 'NPWP', 'JUMLAH', 'TOTAL', 'BAYAR', 'KEMBALI', 'PPN']
+        if any(keyword in line.upper() for keyword in exclude_keywords):
+            continue
+        
+        # Skip jika format tanggal
+        if re.match(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}', line):
+            continue
+        
+        # Skip jika hanya waktu
+        if re.match(r'\d{1,2}[:]\d{2}([:]\d{2})?', line):
+            continue
+        
+        # Ambil jika mengandung angka (kemungkinan item)
+        if any(char.isdigit() for char in line):
+            # Potong jika terlalu panjang
+            if len(line) > 40:
+                line = line[:40]
+            filtered.append(line)
     
-    if 'text' in st.session_state:
-        # ========== EDIT BIAYA ADMIN ==========
-        st.markdown("---")
-        st.subheader("💰 Edit Biaya Admin")
-        
-        # Input biaya admin
-        admin_fee = st.text_input(
-            "Biaya Admin (Rp):",
-            "2500",
-            key="admin_fee",
-            help="Edit biaya admin sesuai kebutuhan"
-        )
-        
-        # ========== EDIT TEKS STRUK ==========
-        st.subheader("✏️ Edit Teks Struk")
-        
-        # Filter hanya items belanja (abaikan tanggal/NPWP)
-        ocr_text = st.session_state.text
-        lines = ocr_text.split('\n')
-        filtered_lines = []
-        
-        for line in lines:
-            line = line.strip()
-            if line:
-                # Skip tanggal/NPWP/JUMLAH
-                if any(keyword in line.upper() for keyword in ['TANGGAL', 'NPWP', 'JUMLAH', 'TOTAL', 'BAYAR']):
-                    continue
-                if re.match(r'\d{2}[/-]\d{2}[/-]\d{4}', line):  # Skip date
-                    continue
-                
-                filtered_lines.append(line)
-        
-        filtered_text = '\n'.join(filtered_lines[:10])  # Maks 10 baris
-        
-        # Text editor
-        edited = st.text_area(
-            "Teks struk (bisa diedit):",
-            filtered_text,
-            height=200,
-            key="struk_editor"
-        )
-        
-        # ========== FORMAT STRUK BESTINDO ==========
-        st.markdown("---")
-        st.subheader("🧾 Format Struk BESTINDO")
-        
-        # Hitung total
-        try:
-            admin = int(admin_fee) if admin_fee.isdigit() else 2500
-        except:
-            admin = 2500
-            
-        subtotal = 25000
-        total = subtotal + admin
-        
-        # Buat struk dengan template
-        current_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        
-        struk_template = f"""          BESTINDO
+    return '\n'.join(filtered[:8])  # Maks 8 items
+
+# Fungsi buat struk
+def create_struk(items_text, admin_fee="2500"):
+    """Buat struk BESTINDO"""
+    
+    current_time = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    
+    # Hitung total
+    try:
+        admin = int(admin_fee) if admin_fee.isdigit() else 2500
+    except:
+        admin = 2500
+    
+    subtotal = 25000
+    total = subtotal + admin
+    change = 30000 - total
+    
+    # Format struk
+    struk = f"""          BESTINDO
       Jl. Raya Contoh No. 123
         Telp: (021) 555-1234
 ================================
 Tanggal: {current_time}
 Kasir   : ADMIN
 ================================
-{edited}
-================================
+"""
+    
+    # Tambahkan items
+    if items_text:
+        for line in items_text.split('\n'):
+            if line.strip():
+                struk += f"{line.strip()}\n"
+    else:
+        struk += "ITEM CONTOH       1   10.000\n"
+        struk += "ITEM LAIN         2   15.000\n"
+    
+    struk += f"""================================
 Subtotal     : Rp {subtotal:,}
 Biaya Admin  : Rp {admin:,}
 --------------------------------
@@ -102,153 +116,173 @@ TOTAL        : Rp {total:,}
 ================================
 Pembayaran   : TUNAI
 Tunai        : Rp 30.000
-Kembali      : Rp {30000 - total:,}
+Kembali      : Rp {change:,}
 ================================
 Terima kasih telah berbelanja
 ================================
 """
+    
+    return struk
+
+# ========== UPLOAD & AUTO PROCESS ==========
+st.header("1. Upload Struk (Auto Proses)")
+
+uploaded = st.file_uploader(
+    "Pilih gambar struk - akan diproses otomatis",
+    type=['jpg', 'png', 'jpeg'],
+    key="file_uploader"
+)
+
+# Auto proses ketika file diupload
+if uploaded and not st.session_state.auto_process:
+    with st.spinner("🔄 Memproses OCR otomatis..."):
+        # Tampilkan gambar
+        st.image(uploaded, use_container_width=True)
         
-        # Tampilkan struk
-        st.text_area("Struk siap print:", struk_template, height=300)
+        # Proses OCR
+        image = Image.open(uploaded)
+        ocr_result = process_ocr(image)
         
-        # Simpan struk untuk print
-        st.session_state.final_struk = struk_template
+        # Filter items
+        items_text = filter_items(ocr_result)
         
-        # ========== TOMBOL PRINT ==========
-        st.markdown("---")
-        st.subheader("🖨️ Print")
+        # Simpan ke session
+        st.session_state.uploaded_file = uploaded
+        st.session_state.ocr_result = ocr_result
+        st.session_state.items_text = items_text
+        st.session_state.auto_process = True
+    
+    st.success("✅ OCR selesai secara otomatis!")
+    
+    # Tampilkan hasil OCR singkat
+    with st.expander("📄 Lihat hasil OCR"):
+        st.text_area("OCR Result:", ocr_result, height=150)
+
+# ========== EDIT BIAYA ADMIN ==========
+if st.session_state.auto_process:
+    st.header("2. Edit Biaya Admin")
+    
+    # Input biaya admin
+    admin_fee = st.text_input(
+        "💰 Biaya Admin (Rp):",
+        "2500",
+        key="admin_fee_input",
+        help="Edit biaya admin sesuai kebutuhan"
+    )
+    
+    # Tampilkan items yang ditemukan
+    st.subheader("Items Terdeteksi")
+    items_display = st.text_area(
+        "Items dari struk:",
+        st.session_state.items_text,
+        height=150,
+        key="items_display"
+    )
+    
+    # ========== STRUK FINAL ==========
+    st.header("3. Struk Siap Print")
+    
+    # Buat struk
+    struk_text = create_struk(items_display, admin_fee)
+    
+    # Tampilkan struk
+    st.text_area("Struk BESTINDO:", struk_text, height=300)
+    
+    # ========== PRINT OPTIONS ==========
+    st.header("4. 🖨️ Print")
+    
+    # Tombol Print HTML
+    if st.button("🖨️ PRINT SEKARANG", type="primary", use_container_width=True):
+        # HTML sederhana untuk print
+        html = f'''<!DOCTYPE html>
+        <html>
+        <head>
+            <title>Print Struk BESTINDO</title>
+            <style>
+                @media print {{
+                    body {{ 
+                        font-family: "Courier New", monospace;
+                        font-size: 12px;
+                        margin: 0;
+                        padding: 10px;
+                    }}
+                }}
+                pre {{
+                    font-family: "Courier New", monospace;
+                    font-size: 12px;
+                    white-space: pre-line;
+                }}
+            </style>
+        </head>
+        <body>
+        <pre>{struk_text}</pre>
+        <script>
+            window.onload = function() {{
+                setTimeout(function() {{
+                    window.print();
+                }}, 500);
+            }};
+        </script>
+        </body>
+        </html>'''
         
-        col_print1, col_print2 = st.columns(2)
-        
-        with col_print1:
-            # Tombol Print HTML
-            if st.button("🖨️ PRINT", type="primary", use_container_width=True):
-                # HTML untuk print (tanpa backslash di f-string)
-                html_content = f'''<!DOCTYPE html>
-                <html>
-                <head>
-                    <title>Print Struk BESTINDO</title>
-                    <style>
-                        @media print {{
-                            @page {{ size: 80mm auto; margin: 0; }}
-                            body {{ 
-                                font-family: "Courier New", monospace;
-                                font-size: 12px;
-                                width: 80mm;
-                                padding: 5px;
-                                margin: 0;
-                            }}
-                        }}
-                        body {{
-                            font-family: "Courier New", monospace;
-                            font-size: 12px;
-                            white-space: pre-line;
-                            padding: 10px;
-                        }}
-                    </style>
-                </head>
-                <body>
-                <pre>
-{struk_template}
-                </pre>
-                <script>
-                    // Auto print setelah 500ms
-                    setTimeout(function() {{
-                        window.print();
-                    }}, 500);
-                </script>
-                </body>
-                </html>'''
-                
-                # Tampilkan HTML
-                st.components.v1.html(html_content, height=400)
-                st.success("Mengirim ke printer...")
-        
-        with col_print2:
-            # Tombol Download
-            st.download_button(
-                "📥 Download",
-                struk_template,
-                f"BESTINDO_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-                "text/plain",
-                use_container_width=True
-            )
-            
-            # Tombol Copy (gunakan st.markdown tanpa f-string complex)
-            st.markdown("""
-            <div id="strukText" style="display: none;">""" + struk_template.replace('`', '\\`') + """</div>
-            <button onclick="copyStruk()" style="
-                width: 100%;
-                padding: 12px;
-                background: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 5px;
-                cursor: pointer;
-                margin-top: 10px;
-            ">
-                📋 Copy Teks
-            </button>
-            
-            <script>
-            function copyStruk() {
-                var strukText = document.getElementById("strukText").textContent;
-                navigator.clipboard.writeText(strukText).then(function() {
-                    alert("Struk berhasil disalin! Paste ke software printer.");
-                });
-            }
-            </script>
-            """, unsafe_allow_html=True)
-        
-        # ========== PETUNJUK PRINT ==========
-        st.info("""
-        **Jika print tidak muncul:**
-        1. Klik tombol **PRINT** di atas
-        2. Tekan **Ctrl+P** (Windows) atau **Cmd+P** (Mac)
-        3. Pilih printer thermal Anda
-        4. Klik **Print**
-        
-        **Atau pakai cara manual:**
-        1. **Copy** teks struk (tombol Copy Teks)
-        2. **Paste** ke software printer thermal
-        3. **Print** langsung
-        """)
-        
-        # ========== RESET ==========
-        if st.button("🔄 Buat Baru", type="secondary"):
-            for key in ['text', 'final_struk']:
-                if key in st.session_state:
-                    del st.session_state[key]
-            st.rerun()
+        # Tampilkan untuk print
+        st.components.v1.html(html, height=400)
+        st.success("✅ Print dialog akan muncul...")
+    
+    # Tombol Copy
+    st.markdown(f"""
+    <div id="copyText" style="display: none;">{struk_text}</div>
+    <button onclick="copyToClipboard()" style="
+        width: 100%;
+        padding: 15px;
+        background: #4CAF50;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 16px;
+        cursor: pointer;
+        margin: 10px 0;
+    ">
+        📋 COPY TEKS UNTUK PRINT MANUAL
+    </button>
+    
+    <script>
+    function copyToClipboard() {{
+        var text = document.getElementById("copyText").textContent;
+        navigator.clipboard.writeText(text).then(function() {{
+            alert("Struk berhasil disalin ke clipboard!");
+        }});
+    }}
+    </script>
+    """, unsafe_allow_html=True)
+    
+    # Tombol Reset
+    if st.button("🔄 UPLOAD STRUK BARU", type="secondary", use_container_width=True):
+        for key in ['uploaded_file', 'ocr_result', 'items_text', 'auto_process']:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.rerun()
 
 # Jika belum upload
-if not uploaded:
+if not st.session_state.auto_process:
     st.info("""
-    **📋 Cara menggunakan:**
+    **⚡ Fitur Auto Process:**
     1. **Upload** gambar struk
-    2. **Edit biaya admin** sesuai kebutuhan
-    3. **Edit teks struk** jika perlu
-    4. **Print** langsung ke printer thermal
+    2. **Otomatis proses OCR** (tidak perlu klik tombol)
+    3. **Edit biaya admin** sesuai kebutuhan
+    4. **Print** langsung
     
-    **✨ Fitur:**
-    - Edit biaya admin
-    - Filter otomatis (abaikan tanggal/NPWP)
-    - Format struk thermal printer
-    - Print langsung dari browser
+    **Items akan otomatis difilter:**
+    ✅ Diambil: Items belanja dengan harga
+    ❌ Dihapus: Tanggal, NPWP, Total, PPN
     """)
 
 # Footer
 st.markdown("---")
-st.caption("biling.web.id | Edit biaya admin + Print thermal")
-EOF
-
-echo "✅ Aplikasi sudah di-fix, tidak ada error!"
-
-
-
-
-UNTUK RESET
-cd /www/wwwroot/biling.web.id
-pkill -f streamlit
-nohup streamlit run app.py --server.port 8501 --server.address 0.0.0.0 > app.log 2>&1 &
-echo "✅ Aplikasi auto process jalan!"
+st.markdown("""
+<div style="text-align: center; color: #666;">
+    <strong>BESTINDO - Auto OCR Processing</strong><br>
+    Upload langsung proses, tanpa klik tombol
+</div>
+""", unsafe_allow_html=True)
